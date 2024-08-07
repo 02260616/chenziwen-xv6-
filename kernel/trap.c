@@ -5,6 +5,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -53,7 +56,7 @@ usertrap(void)
   if(r_scause() == 8){
     // system call
 
-    if(lockfree_read4(&p->killed))
+    if(p->killed)
       exit(-1);
 
     // sepc points to the ecall instruction,
@@ -65,19 +68,52 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 13 || r_scause() == 15){
+    uint64 va = r_stval();
+    struct vma *pvma;
+    int i = 0;
+    //p->sz point to the top of heap(i.e. bottom of trapframe)
+    //p->trapframe->sp point to the top of stack
+    if((va >= p->sz) || (va < PGROUNDDOWN(p->trapframe->sp))){
+      p->killed = 1;
+    } else{
+      va = PGROUNDDOWN(va);
+      for(; i < MAXVMA; i++){
+	pvma = &p->vma_table[i];
+        if(pvma->mapped && (va >= pvma->addr) && (va < (pvma->addr + pvma->len))){
+          char *mem;
+	  mem = kalloc();
+	  if(mem == 0){
+	    p->killed = 1;
+	    break;
+	  }
+	  memset(mem, 0, PGSIZE);
+	  //PTE_R (1L << 1), so prot also needs to move left one bit
+	  if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, (pvma->prot << 1) | PTE_U) != 0){
+	    kfree(mem);
+	    p->killed = 1;
+	    break;
+	  }
+	  break;
+	}
+      }
+    }
+
+    if(p->killed != 1 && i <= MAXVMA){
+      ilock(pvma->f->ip);
+      readi(pvma->f->ip, 1, va, va - pvma->addr, PGSIZE);
+      iunlock(pvma->f->ip);
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-
-    
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
-  if(lockfree_read4(&p->killed))
+  if(p->killed)
     exit(-1);
-  
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
@@ -192,13 +228,7 @@ devintr()
       uartintr();
     } else if(irq == VIRTIO0_IRQ){
       virtio_disk_intr();
-    }
-#ifdef LAB_NET
-    else if(irq == E1000_IRQ){
-      e1000_intr();
-    }
-#endif
-    else if(irq){
+    } else if(irq){
       printf("unexpected interrupt irq=%d\n", irq);
     }
 
