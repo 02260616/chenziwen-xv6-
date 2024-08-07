@@ -331,13 +331,6 @@ sfence_vma()
   asm volatile("sfence.vma zero, zero");
 }
 
-static inline uint64
-r_fp()
-{
-  uint64 x;
-  asm volatile("mv %0, s0" : "=r" (x) );
-  return x;
-}
 
 #define PGSIZE 4096 // bytes per page
 #define PGSHIFT 12  // bits of offset within a page
@@ -350,6 +343,7 @@ r_fp()
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // 1 -> user can access
+#define PTE_COW (1L << 8) // 使用 RSW（保留给软件）位来表示写时复制（Copy-on-Write）页面
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
@@ -370,4 +364,4 @@ r_fp()
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
 
 typedef uint64 pte_t;
-typedef uint64 *pagetable_t; // 512 PTEs
+typedef uint64 *pagetable_t; // 512 PTEss
